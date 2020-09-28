@@ -1,0 +1,22 @@
+# Configure a default setup of Home Assistant (frontend, api, etc)
+default_config:
+
+# Text to speech
+tts:
+  - platform: google_translate
+
+group: !include groups.yaml
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+# MQTT configuration
+mqtt:
+  broker: 10.56.5.120
+  port: 8883
+  tls_insecure: true
+  certificate: ./certs/ca.crt
+  client_cert: ./certs/client.crt
+  client_key: ./certs/client.key
+  discovery: true
+  discovery_prefix: cpd

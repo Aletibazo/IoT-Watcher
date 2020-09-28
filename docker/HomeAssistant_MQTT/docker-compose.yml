@@ -1,0 +1,33 @@
+version: '3.5'
+
+services:
+  mosquitto:
+    container_name: mosquitto
+    image: eclipse-mosquitto:1.6.12
+    volumes:
+      - ./mosquitto:/mosquitto/config/
+    ports:
+      - '8883:8883'
+    networks:
+      - default
+    restart: unless-stopped
+  homeassistant:
+    container_name: homeassistant
+    image: homeassistant/raspberrypi3-homeassistant:stable
+    volumes:
+      - ./homeassistant:/config
+      - /etc/localtime:/etc/localtime:ro
+      - ./homeassistant/shared:/shared
+    ports:
+      - "80:8123"
+    networks:
+      - default
+    restart: unless-stopped
+    privileged: true
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/Madrid
+
+networks:
+  default:
