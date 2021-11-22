@@ -1,6 +1,14 @@
 /*
-* This program connects NodeMCU Mini to a MQTT broker using TLS
-* and sends data from DS18B20 sensor to specified topics. It also
+* This is the firmware for Aletibazo Electronics Sensor Board v0.1
+* 
+* Pinout correspondence between the board and the ESP8266:
+*   * PIR      -> D0
+*   * LED      -> D3
+*   * 1W, TEMP -> D4
+*   * HUMIDITY -> D5
+*   
+* This program connects to a MQTT broker using TLS
+* and sends data from DS18B20, DHT22 and PIR sensors to specified topics. It also
 * displays sensors data and other info on a 128x32 OLED display.
 * 
 * Don't forget to set variables to connect to access point and MQTT broker.
@@ -25,9 +33,13 @@
 #include <OneWire.h>
 #include <U8g2lib.h>
 #include <SPI.h>
+#include <DHT.h>
 
 // PIR sensor is connected to pin D0
 int PIR_SENSOR = D0;
+// DHT22 sensor connected to pin D5
+int DHT_SENSOR = D5;
+DHT dht(DHT_SENSOR, 'DHT22');
 
 // Data wire is plugged into pin D4 on the NodeMCU
 #define ONE_WIRE_BUS D4
@@ -43,20 +55,27 @@ U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0);
 /**
  * Customize this settings 
  */
-const char* ssid = "";
-const char* password = "";
-#define IPSET_STATIC { , , ,  }
-#define IPSET_GATEWAY { , , ,  }
-#define IPSET_SUBNET { , , ,  }
-#define IPSET_DNS { , , ,  }
+const char* ssid = "SSID-Name";
+const char* password = "SSID-Password";
+#define IPSET_STATIC { xxx, xxx, xxx, xxx }
+#define IPSET_GATEWAY { xxx, xxx, xxx, xxx }
+#define IPSET_SUBNET { xxx, xxx, xxx, xxx }
+#define IPSET_DNS { xxx, xxx, xxx, xxx }
 
 
-const char* ClientName = "";
-const char* MQTTServer = "";
-char* TopicTemp = "";
-char* TopicHumdt = "";
-char* TopicPIR = "";
-char* TopicSub = "";
+// TODO Change this to parametrize ClientName so it needs to be replaced only once
+const char* ClientName = "RackNumber";
+const char* MQTTServer = "your-domain.org";
+
+char* TopicSub = "cpd/RackNumber/led";
+char* TopicConfigTemp = "cpd/sensor/RackNumberTemp/config";
+char* PayloadConfigTemp = "{\"device_class\": \"temperature\", \"name\": \"RackNumberTemperature\", \"state_topic\": \"cpd/sensor/RackNumber/state\", \"unit_of_measurement\": \"°C\", \"value_template\": \"{{ value_json.temperature }}\" }";
+char* TopicConfigHumdt = "cpd/sensor/RackNumberHumdt/config";
+char* PayloadConfigHumdt = "{\"device_class\": \"humidity\", \"name\": \"RackNumberHumidity\", \"state_topic\": \"cpd/sensor/RackNumber/state\", \"unit_of_measurement\": \"%\", \"value_template\": \"{{ value_json.humidity }}\" }";
+char* StateTopic = "cpd/sensor/RackNumber/state";
+char* TopicConfigPIR = "cpd/binary_sensor/RackNumberPIR/config";
+char* PayloadConfigPIR = "{\"device_class\": \"motion\", \"name\": \"RackNumberPIR\", \"state_topic\": \"cpd/binary_sensor/RackNumberPIR/state\" }";
+char* StateTopicPIR = "cpd/binary_sensor/RackNumberPIR/state";
 
 /**
  * End of customization
@@ -70,10 +89,13 @@ byte IPDNS[] = IPSET_DNS;
 WiFiClientSecure ESPClient;
 PubSubClient client(MQTTServer, 8883, ESPClient);
 
-long lastMsg = 0;
+int lastMsg = 0;
+boolean configured = false;
+
 char msg[50];
 
 float t;
+float h;
 char buff[5];
 
 int buttonState = 0;
@@ -84,6 +106,7 @@ void setup() {
   Serial.begin(115200);
 
   u8g2.begin();
+  dht.begin();
 
   printInfo("Setting up...");
   // Connect WiFi
@@ -115,24 +138,50 @@ void loop() {
 
   long now = millis();
 
+  // Send sensor config on power on
+  if (!configured) {
+    configured = true;
+
+    sendmqttMsg(TopicConfigTemp, PayloadConfigTemp);
+    sendmqttMsg(TopicConfigHumdt, PayloadConfigHumdt);
+    sendmqttMsg(TopicConfigPIR, PayloadConfigPIR);
+  }
+  
   // Send sensors data every 5 sec
   if (now - lastMsg > 5000) {
+    String payload = String();
     lastMsg = now;
 
+    // Obtain temperature from DS18B20 1-wire sensor
     sensors.requestTemperatures();
     t = sensors.getTempCByIndex(0);
-       
-    dtostrf(t, 5, 2, buff);
+    // Add temperature to payload
+    payload = "{ \"temperature\": " + String(t, 2);
+    // Obtain humidity from DHT22 sensor
+    h = dht.readHumidity();
+    // If we can't get data from the sensor, we send -127
+    String hmdt = (isnan(h) == 1) ? "-127" : String(h, 2);
+    // Add humidity to payload
+    payload = payload + ", \"humidity\": ";
+    payload = payload + hmdt;
+    // Add presence to payload, getting value from digital pin
+    // Close payload string, send it to StateTopic MQTT topic
+    payload = payload + " }";
+    // Send MQTT payload for temperature and humidity
+    sendmqttMsg(StateTopic, payload);
+
+    // Prepare payload for PIR, reading data from DHT22
+    String motion = (digitalRead(PIR_SENSOR) == 1) ? "ON" : "OFF";
+    payload = "{ \"state\": \"" + motion;
+    // Close payload string, send it to StateTopic MQTT topic
+    payload = payload + "\" }";
+    // Send MQTT payload for PIR
+    sendmqttMsg(StateTopicPIR, motion);
     
-    sendmqttMsg(TopicTemp, buff);
-    Serial.print("Temperature");
-    Serial.println(buff);
-    printData(buff);
     
-    dtostrf(digitalRead(PIR_SENSOR), 5, 2, buff);
-    sendmqttMsg(TopicPIR, buff);
-    Serial.print("Presence: ");
-    Serial.println(buff);
+    // Print data to OLED
+    printData(t, h);
+    
   }
 }
 
@@ -147,14 +196,20 @@ void printInfo(const char *s){
 }
 // Function to display set up information
 // Given char must be 16chars max
-void printData(const char *s){
+void printData(float temperature, float humidity){
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_t0_16_tf);
-  u8g2.drawStr(0, 12, ClientName);
-  u8g2.setFont(u8g2_font_t0_11_tf);
-  u8g2.drawStr(0, 24, "T: ");
-  u8g2.drawStr(15, 24, s);
-  u8g2.drawUTF8(45, 24, "ºC"); 
+  u8g2.setCursor(0, 12);
+  u8g2.print(ClientName);
+  u8g2.setFont(u8g2_font_profont10_tf);
+  u8g2.setCursor(0, 20);
+  u8g2.print("T: ");
+  u8g2.print(temperature);
+  u8g2.print(" C");
+  u8g2.setCursor(0, 28);
+  u8g2.print("H: ");
+  u8g2.print(humidity);
+  u8g2.print(" %");
   u8g2.sendBuffer();
 }
 
@@ -211,7 +266,7 @@ void loadCerts() {
    Serial.println("Failed to mount file system");
    return;
   }
-
+  
   // Load client certificate file from SPIFFS
   File cert = SPIFFS.open("/client.crt", "r"); //replace client.crt with your uploaded file name
   if (!cert)
