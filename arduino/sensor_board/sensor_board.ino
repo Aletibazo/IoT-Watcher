@@ -33,13 +33,13 @@
 #include <OneWire.h>
 #include <U8g2lib.h>
 #include <SPI.h>
-#include <DHT.h>
+#include <DHTesp.h>
 
 // PIR sensor is connected to pin D0
 int PIR_SENSOR = D0;
-// DHT22 sensor connected to pin D5
+// DHT11 sensor connected to pin D5
 int DHT_SENSOR = D5;
-DHT dht(DHT_SENSOR, 'DHT22');
+DHTesp dht;
 
 // Data wire is plugged into pin D4 on the NodeMCU
 #define ONE_WIRE_BUS D4
@@ -106,7 +106,7 @@ void setup() {
   Serial.begin(115200);
 
   u8g2.begin();
-  dht.begin();
+  dht.setup(DHT_SENSOR, DHTesp::DHT11);
 
   printInfo("Setting up...");
   // Connect WiFi
@@ -158,7 +158,7 @@ void loop() {
     // Add temperature to payload
     payload = "{ \"temperature\": " + String(t, 2);
     // Obtain humidity from DHT22 sensor
-    h = dht.readHumidity();
+    h = dht.getHumidity();
     // If we can't get data from the sensor, we send -127
     String hmdt = (isnan(h) == 1) ? "-127" : String(h, 2);
     // Add humidity to payload
